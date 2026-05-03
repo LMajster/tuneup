@@ -1,7 +1,7 @@
 // ─── WebSocket Client ──────────────────────────────
 // Connects to the Tuneup game server on the VPS.
 
-const WS_URL = 'ws://89.167.6.79/ws';
+const WS_URL = 'wss://89-167-6-79.sslip.io/ws';
 
 export type WsEventCallback = (data: any) => void;
 

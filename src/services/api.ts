@@ -4,7 +4,7 @@
 import type { User } from '../types';
 
 // VPS server URL
-const BASE_URL = 'http://89.167.6.79/api';
+const BASE_URL = 'https://89-167-6-79.sslip.io/api';
 
 interface ApiResponse<T> {
   data?: T;
