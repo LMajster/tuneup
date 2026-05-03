@@ -221,12 +221,12 @@ export default function GameScreen({ navigation, route }: Props) {
         )}
       </View>
 
-      {/* YouTube Player */}{" "}
+      {/* YouTube Player */}
       <YouTubePlayer
         videoId={youtubeId}
         songTitle={revealedSong?.title}
         songArtist={revealedSong?.artist}
-        shouldPlay={roundActive && !!youtubeId}
+        roundActive={roundActive}
       />
 
       {/* Answer Feedback */}
