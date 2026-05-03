@@ -123,7 +123,7 @@ export default function HomeScreen({ navigation }: Props) {
         <Feature icon="🏆" text="Multiple game modes" />
       </View>
 
-      <Text style={styles.version}>v0.1.0 · Tuneup</Text>
+      <Text style={styles.version}>v0.1.1 · HTTPS build · Tuneup</Text>
     </SafeAreaView>
   );
 }
