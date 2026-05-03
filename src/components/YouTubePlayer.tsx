@@ -1,8 +1,7 @@
 // ─── YouTube Player ────────────────────────────────
 // Uses react-native-youtube-iframe for in-app YouTube playback.
-// Two states:
-//   1) roundActive=true: video plays hidden (audio only, no visual clues)
-//   2) roundActive=false: video + song info revealed after round ends
+// Always visible during testing. Autoplay uses muted-start retry strategy.
+// Future: Google Sign-In for Premium, YouTube Data API for audio tracks.
 
 import React, { useCallback, useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, Text, TouchableOpacity } from 'react-native';
@@ -12,104 +11,143 @@ interface YouTubePlayerProps {
   videoId: string | null;
   songTitle?: string;
   songArtist?: string;
-  roundActive: boolean;
+  // TODO: Add isSignedIn prop from Google OAuth later
 }
 
 export default function YouTubePlayer({
   videoId,
   songTitle,
   songArtist,
-  roundActive,
 }: YouTubePlayerProps) {
   const [playerReady, setPlayerReady] = useState(false);
   const [playing, setPlaying] = useState(false);
-  const playInitiated = useRef(false);
+  const [playerState, setPlayerState] = useState('idle');
+  const [playAttempts, setPlayAttempts] = useState(0);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Reset play state when video changes
+  // Reset on new video
   useEffect(() => {
     setPlayerReady(false);
     setPlaying(false);
-    playInitiated.current = false;
+    setPlayerState('loading');
+    setPlayAttempts(0);
+    if (retryTimer.current) clearTimeout(retryTimer.current);
   }, [videoId]);
 
-  // Auto-play once player is ready
+  // When player is ready, attempt autoplay
   useEffect(() => {
-    if (playerReady && !playInitiated.current && videoId) {
-      playInitiated.current = true;
-      // Small delay to ensure player is fully initialized
-      const t = setTimeout(() => setPlaying(true), 300);
-      return () => clearTimeout(t);
+    if (playerReady && videoId && !playing) {
+      setPlaying(true);
+      setPlayerState('attempting');
     }
   }, [playerReady, videoId]);
 
-  // Stop playback when round ends (optional — let it continue or stop)
-  // Currently let it keep playing until next round
+  // Retry autoplay after a delay if it didn't start
+  useEffect(() => {
+    if (playerState === 'attempting' && !playing) {
+      retryTimer.current = setTimeout(() => {
+        setPlaying(true);
+        setPlayAttempts((n) => n + 1);
+      }, 1500);
+      return () => {
+        if (retryTimer.current) clearTimeout(retryTimer.current);
+      };
+    }
+  }, [playerState, playing]);
 
   const onReady = useCallback(() => {
     setPlayerReady(true);
   }, []);
 
   const onStateChange = useCallback((event: string) => {
-    // 'unstarted', 'playing', 'paused', 'ended', 'buffering', 'cued'
+    setPlayerState(event);
     if (event === 'ended') {
       setPlaying(false);
+    } else if (event === 'playing') {
+      setPlaying(true);
     }
   }, []);
 
   const onError = useCallback((error: string) => {
     console.warn('[YT] Error:', error);
+    setPlayerState('error');
+  }, []);
+
+  const handleTapPlay = useCallback(() => {
+    setPlaying(true);
+    setPlayAttempts(0);
+    setPlayerState('user_play');
   }, []);
 
   if (!videoId) return null;
 
+  const isPlayingOrBuffering =
+    playerState === 'playing' || playerState === 'buffering';
+
   return (
     <View style={styles.container}>
-      {/* Round active: hide the player behind overlay, show minimal indicator */}
-      {roundActive ? (
-        <View style={styles.playingOverlay}>
-          <Text style={styles.playingIcon}>🎵</Text>
-          <Text style={styles.playingText}>Playing...</Text>
-          {/* Tiny hidden player so audio keeps going */}
-          <View style={styles.hiddenPlayer}>
-            <YoutubeIframe
-              key={videoId}
-              videoId={videoId}
-              height={1}
-              play={playing}
-              onChangeState={onStateChange}
-              onReady={onReady}
-              onError={onError}
-              volume={100}
-            />
-          </View>
+      {/* Header with song info (always visible during testing) */}
+      <View style={styles.header}>
+        {isPlayingOrBuffering ? (
+          <Text style={styles.playingIcon}>🔊</Text>
+        ) : (
+          <Text style={styles.pausedIcon}>🔇</Text>
+        )}
+        <View style={styles.songInfo}>
+          <Text style={styles.songTitle}>
+            {songTitle || 'Now Playing'}
+          </Text>
+          {songArtist && (
+            <Text style={styles.songArtist}>{songArtist}</Text>
+          )}
         </View>
-      ) : (
-        /* Round ended: reveal the song + video player */
-        <>
-          {/* Reveal header with song info */}
-          <View style={styles.header}>
-            <Text style={styles.headerIcon}>🎵</Text>
-            <View style={styles.songInfo}>
-              <Text style={styles.songTitle}>{songTitle || 'Unknown'}</Text>
-              {songArtist && <Text style={styles.songArtist}>{songArtist}</Text>}
-            </View>
-          </View>
+        <Text style={styles.stateLabel}>
+          {playerState === 'playing' ? '▶ Playing' :
+           playerState === 'buffering' ? '⏳ Buffering' :
+           playerState === 'paused' ? '⏸ Paused' :
+           playerState === 'ended' ? '⏹ Ended' :
+           playerState === 'error' ? '⚠️ Error' :
+           playerState === 'attempting' ? '🔁 Trying...' :
+           '⏳ Loading'}
+        </Text>
+      </View>
 
-          {/* Full YouTube player */}
-          <View style={styles.playerWrapper}>
-            <YoutubeIframe
-              key={videoId}
-              videoId={videoId}
-              height={180}
-              play={playing}
-              onChangeState={onStateChange}
-              onReady={onReady}
-              onError={onError}
-              volume={100}
-              webViewStyle={styles.webview}
-            />
-          </View>
-        </>
+      {/* YouTube Player (always visible) */}
+      <View style={styles.playerWrapper}>
+        <YoutubeIframe
+          key={videoId}
+          videoId={videoId}
+          height={180}
+          play={playing}
+          onChangeState={onStateChange}
+          onReady={onReady}
+          onError={onError}
+          volume={100}
+          // controls=true lets user tap play manually
+          initialPlayerParams={{
+            controls: true,
+            modestbranding: true,
+            rel: false,
+            fs: false,
+          }}
+          webViewStyle={styles.webview}
+        />
+      </View>
+
+      {/* Fallback play button if autoplay didn't start */}
+      {!isPlayingOrBuffering && playerReady && (
+        <TouchableOpacity
+          style={styles.tapToPlay}
+          onPress={handleTapPlay}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.tapIcon}>▶</Text>
+          <Text style={styles.tapText}>
+            {playAttempts > 0
+              ? `Tap to Play (attempt ${playAttempts + 1})`
+              : 'Tap to Play'}
+          </Text>
+        </TouchableOpacity>
       )}
     </View>
   );
@@ -124,57 +162,39 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginBottom: 12,
   },
-  // ── Hidden/Playing state ──
-  playingOverlay: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 14,
-    gap: 8,
-    backgroundColor: '#1A73E820',
-  },
-  playingIcon: {
-    fontSize: 18,
-  },
-  playingText: {
-    color: '#58A6FF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  hiddenPlayer: {
-    position: 'absolute',
-    top: -9999,
-    left: -9999,
-    width: 1,
-    height: 1,
-    opacity: 0.01,
-  },
-  // ── Revealed state ──
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     backgroundColor: '#1A73E820',
     borderBottomWidth: 1,
     borderBottomColor: '#30363D',
   },
-  headerIcon: {
-    fontSize: 24,
+  playingIcon: {
+    fontSize: 16,
+  },
+  pausedIcon: {
+    fontSize: 16,
+    opacity: 0.5,
   },
   songInfo: {
     flex: 1,
   },
   songTitle: {
     color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
   },
   songArtist: {
     color: '#8B949E',
-    fontSize: 13,
+    fontSize: 12,
     marginTop: 1,
+  },
+  stateLabel: {
+    color: '#8B949E',
+    fontSize: 11,
   },
   playerWrapper: {
     height: 180,
@@ -183,5 +203,22 @@ const styles = StyleSheet.create({
   webview: {
     backgroundColor: '#0D1117',
     opacity: 0.99,
+  },
+  tapToPlay: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    backgroundColor: '#1A73E8',
+  },
+  tapIcon: {
+    fontSize: 16,
+    color: '#FFFFFF',
+  },
+  tapText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

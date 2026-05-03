@@ -226,7 +226,6 @@ export default function GameScreen({ navigation, route }: Props) {
         videoId={youtubeId}
         songTitle={revealedSong?.title}
         songArtist={revealedSong?.artist}
-        roundActive={roundActive}
       />
 
       {/* Answer Feedback */}
