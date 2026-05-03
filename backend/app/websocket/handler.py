@@ -42,6 +42,35 @@ async def handle_websocket(ws: WebSocket, room_id: str, token: str):
         user = db.query(User).filter(User.id == player_id).first()
         await manager.connect(room_id, player_id, ws)
 
+        # Broadcast full room state to everyone
+        from sqlalchemy.orm import joinedload
+        room_obj = db.query(Room).options(
+            joinedload(Room.players).joinedload(RoomPlayer.user)
+        ).filter(Room.id == room_id).first()
+
+        if room_obj:
+            player_list = [
+                {
+                    "id": rp.user_id,
+                    "username": rp.user.username if rp.user else rp.user_id,
+                    "display_name": rp.user.display_name if rp.user else rp.user_id,
+                    "score": rp.score,
+                    "is_host": rp.is_host,
+                    "status": rp.status,
+                }
+                for rp in room_obj.players
+            ]
+            from app.websocket.manager import manager
+            await manager.broadcast(room_id, {
+                "type": "room_state",
+                "room_id": room_id,
+                "status": room_obj.status,
+                "mode": room_obj.mode,
+                "current_round": 0,
+                "total_rounds": room_obj.total_rounds,
+                "players": player_list,
+            })
+
         # Notify others
         await manager.broadcast(
             room_id,
