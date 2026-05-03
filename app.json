@@ -29,7 +29,8 @@
         "backgroundColor": "#0D1117"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.tuneup.app"
+      "package": "com.tuneup.app",
+      "usesCleartextTraffic": true
     },
     "web": {
       "favicon": "./assets/favicon.png"
