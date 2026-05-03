@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -6,13 +6,63 @@ import {
   TouchableOpacity,
   SafeAreaView,
   StatusBar,
+  ActivityIndicator,
+  Alert,
+  TextInput,
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../types';
+import { useStore, registerOrLogin } from '../store';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
 export default function HomeScreen({ navigation }: Props) {
+  const { restoreAuth, isAuthenticated, setAuth, setDisplayName, displayName } = useStore();
+  const [nameInput, setNameInput] = useState(displayName || '');
+  const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(false);
+
+  // Restore saved auth on mount
+  useEffect(() => {
+    (async () => {
+      const restored = await restoreAuth();
+      setLoading(false);
+    })();
+  }, []);
+
+  const ensureAuth = async (callback: () => void) => {
+    if (isAuthenticated && useStore.getState().token) {
+      callback();
+      return;
+    }
+    if (!nameInput.trim()) {
+      Alert.alert('Name required', 'Enter a display name to continue');
+      return;
+    }
+    setAuthLoading(true);
+    try {
+      const result = await registerOrLogin(nameInput.trim());
+      await setAuth(result.token, result.user);
+      await setDisplayName(nameInput.trim());
+      callback();
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to connect');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.center}>
+          <Text style={styles.logo}>♪ Tuneup</Text>
+          <ActivityIndicator color="#1A73E8" size="large" />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#0D1117" />
@@ -22,11 +72,33 @@ export default function HomeScreen({ navigation }: Props) {
         <Text style={styles.tagline}>Guess the song. Beat the room.</Text>
       </View>
 
+      {!isAuthenticated && (
+        <View style={styles.nameSection}>
+          <TextInput
+            style={styles.nameInput}
+            placeholder="Your display name"
+            placeholderTextColor="#484F58"
+            value={nameInput}
+            onChangeText={setNameInput}
+            maxLength={20}
+            autoCapitalize="words"
+          />
+        </View>
+      )}
+
+      {authLoading && (
+        <View style={styles.center}>
+          <ActivityIndicator color="#1A73E8" size="small" />
+          <Text style={styles.loadingText}>Connecting...</Text>
+        </View>
+      )}
+
       <View style={styles.actions}>
         <TouchableOpacity
           style={[styles.button, styles.primaryButton]}
-          onPress={() => navigation.navigate('CreateRoom')}
+          onPress={() => ensureAuth(() => navigation.navigate('CreateRoom'))}
           activeOpacity={0.85}
+          disabled={authLoading}
         >
           <Text style={styles.buttonIcon}>🎤</Text>
           <Text style={styles.buttonLabel}>Host a Game</Text>
@@ -35,8 +107,9 @@ export default function HomeScreen({ navigation }: Props) {
 
         <TouchableOpacity
           style={[styles.button, styles.secondaryButton]}
-          onPress={() => navigation.navigate('JoinRoom')}
+          onPress={() => ensureAuth(() => navigation.navigate('JoinRoom'))}
           activeOpacity={0.85}
+          disabled={authLoading}
         >
           <Text style={styles.buttonIcon}>👂</Text>
           <Text style={styles.buttonLabel}>Join a Game</Text>
@@ -70,6 +143,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#0D1117',
     paddingHorizontal: 24,
   },
+  center: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   header: {
     flex: 1,
     justifyContent: 'center',
@@ -84,6 +162,24 @@ const styles = StyleSheet.create({
   tagline: {
     fontSize: 16,
     color: '#8B949E',
+  },
+  nameSection: {
+    marginBottom: 16,
+  },
+  nameInput: {
+    backgroundColor: '#161B22',
+    borderWidth: 1,
+    borderColor: '#30363D',
+    borderRadius: 12,
+    padding: 16,
+    fontSize: 16,
+    color: '#FFFFFF',
+    textAlign: 'center',
+  },
+  loadingText: {
+    color: '#8B949E',
+    fontSize: 14,
+    marginTop: 8,
   },
   actions: {
     gap: 16,

@@ -7,148 +7,245 @@ import {
   TouchableOpacity,
   SafeAreaView,
   FlatList,
-  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { RootStackParamList, Round, Answer, Player, Song } from '../types';
+import type { RootStackParamList } from '../types';
+import { useStore } from '../store';
+import { socketClient } from '../services/socket';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Game'>;
 
-const MOCK_ROUND: Round = {
-  id: 'r1',
-  roundNumber: 1,
-  song: {
-    id: 's1',
-    title: 'Blinding Lights',
-    artist: 'The Weeknd',
-    albumArt: undefined,
-    duration: 200,
-    youtubeId: 'fHI8X4OXluQ',
-  },
-  startTime: Date.now(),
-  endTime: Date.now() + 30000,
-  clipDuration: 15,
-  status: 'active',
-  answers: [],
-};
+interface GuessEntry {
+  player: string;
+  guess: string;
+  correct: boolean;
+}
 
 export default function GameScreen({ navigation, route }: Props) {
-  const [round, setRound] = useState<Round>(MOCK_ROUND);
+  const { roomId } = route.params;
+  const {
+    players,
+    currentRound,
+    totalRounds,
+    isHost,
+    setCurrentRound,
+    setGameStatus,
+    updatePlayers,
+    setLastGameResults,
+    user,
+  } = useStore();
+
   const [guess, setGuess] = useState('');
-  const [guesses, setGuesses] = useState<{ player: string; guess: string; correct: boolean }[]>([]);
+  const [guesses, setGuesses] = useState<GuessEntry[]>([]);
   const [timeLeft, setTimeLeft] = useState(30);
   const [roundNumber, setRoundNumber] = useState(1);
-  const [scores, setScores] = useState<Record<string, number>>({
-    You: 0,
-    Guest1: 0,
-  });
+  const [scores, setScores] = useState<Record<string, number>>({});
+  const [revealedSong, setRevealedSong] = useState<{ title: string; artist: string } | null>(null);
+  const [roundActive, setRoundActive] = useState(true);
+  const [answerFeedback, setAnswerFeedback] = useState<{ correct: boolean; points: number } | null>(null);
+  const [isAnswering, setIsAnswering] = useState(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Timer countdown
+  // Initialize scores from players
   useEffect(() => {
-    timerRef.current = setInterval(() => {
-      setTimeLeft((t) => {
-        if (t <= 1) {
-          clearInterval(timerRef.current!);
-          return 0;
+    const initialScores: Record<string, number> = {};
+    players.forEach((p) => {
+      initialScores[p.displayName] = p.score;
+    });
+    setScores(initialScores);
+  }, []);
+
+  // Setup WebSocket listeners
+  useEffect(() => {
+    socketClient.on('round_start', (data) => {
+      setRoundNumber(data.round_number);
+      setCurrentRound(data.round_number);
+      setTimeLeft(data.guess_time || 30);
+      setGuesses([]);
+      setRevealedSong(null);
+      setRoundActive(true);
+      setAnswerFeedback(null);
+      setIsAnswering(false);
+      setGuess('');
+
+      // Start timer
+      if (timerRef.current) clearInterval(timerRef.current);
+      let remaining = data.guess_time || 30;
+      timerRef.current = setInterval(() => {
+        remaining -= 1;
+        setTimeLeft(Math.max(0, remaining));
+        if (remaining <= 0) {
+          if (timerRef.current) clearInterval(timerRef.current);
         }
-        return t - 1;
+      }, 1000);
+    });
+
+    socketClient.on('round_end', (data) => {
+      setRoundActive(false);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      setTimeLeft(0);
+      setRevealedSong({
+        title: data.song?.title || 'Unknown',
+        artist: data.song?.artist || 'Unknown',
       });
-    }, 1000);
+
+      // Update scores from rankings
+      if (data.rankings) {
+        const newScores = { ...scores };
+        data.rankings.forEach((r: any) => {
+          const player = players.find((p) => p.id === r.player_id);
+          if (player) {
+            newScores[player.displayName] = r.score;
+          }
+        });
+        setScores(newScores);
+      }
+    });
+
+    socketClient.on('answer_result', (data) => {
+      setAnswerFeedback({
+        correct: data.correct,
+        points: data.points || 0,
+      });
+      setIsAnswering(false);
+    });
+
+    socketClient.on('player_guessed', (data) => {
+      const player = players.find((p) => p.id === data.player_id);
+      if (player) {
+        setGuesses((prev) => [
+          { player: player.displayName, guess: '🎵 guessed!', correct: false },
+          ...prev,
+        ]);
+      }
+    });
+
+    socketClient.on('game_over', (data) => {
+      setGameStatus('finished');
+
+      // Build results for the results screen
+      const rankings = data.players
+        ?.sort((a: any, b: any) => (a.rank || 0) - (b.rank || 0))
+        .map((p: any) => ({
+          id: p.player_id,
+          displayName: p.display_name || p.username || p.player_id,
+          score: p.score || 0,
+          rank: p.rank || 0,
+        })) || [];
+
+      const winner = rankings[0] || null;
+      setLastGameResults({ winner, rankings });
+
+      setTimeout(() => {
+        navigation.replace('Results', { roomId });
+      }, 2000);
+    });
+
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [roundNumber]);
+  }, [roomId, players]);
 
   const handleSubmitGuess = () => {
-    if (!guess.trim()) return;
+    if (!guess.trim() || !roundActive || isAnswering) return;
 
-    const isCorrect = guess.toLowerCase().trim() ===
-      round.song.title.toLowerCase().trim();
+    setIsAnswering(true);
+    socketClient.send({
+      type: 'submit_guess',
+      data: { guess: guess.trim() },
+    });
 
+    // Add to local list
     setGuesses((prev) => [
-      { player: 'You', guess: guess.trim(), correct: isCorrect },
+      { player: 'You', guess: guess.trim(), correct: false },
       ...prev,
     ]);
-
-    if (isCorrect) {
-      const bonus = Math.max(0, timeLeft) * 10;
-      setScores((s) => ({ ...s, You: (s.You || 0) + 100 + bonus }));
-      Alert.alert('🎉 Correct!', `+${100 + bonus} points!`);
-      setGuess('');
-    } else {
-      setGuess('');
-    }
+    setGuess('');
   };
 
   const handleNextRound = () => {
-    if (roundNumber >= 10) {
-      navigation.replace('Results', { roomId: route.params.roomId });
-      return;
+    if (isHost) {
+      socketClient.send({ type: 'next_round', data: {} });
+    } else {
+      setRoundActive(true);
+      setGuess('');
     }
-    setRoundNumber((r) => r + 1);
-    setTimeLeft(30);
-    setGuesses([]);
-    setGuess('');
-    // TODO: fetch next round from server
   };
 
-  const progress = (timeLeft / 30) * 100;
+  const progress = totalRounds > 0 ? (timeLeft / 30) * 100 : 100;
+  const myScore = user?.id ? (scores[players.find((p) => p.id === user?.id)?.displayName || ''] || 0) : 0;
 
   return (
     <SafeAreaView style={styles.container}>
       {/* Top Bar */}
       <View style={styles.topBar}>
         <Text style={styles.roundText}>
-          Round {roundNumber}/10
+          Round {roundNumber}/{totalRounds}
         </Text>
         <Text style={styles.scoreText}>
-          🏆 {scores.You} pts
+          🏆 {myScore} pts
         </Text>
       </View>
 
       {/* Timer Bar */}
       <View style={styles.timerBar}>
-        <View style={[styles.timerFill, { width: `${progress}%` }]} />
+        <View style={[styles.timerFill, { width: `${Math.max(0, progress)}%` }]} />
       </View>
       <Text style={styles.timerText}>{timeLeft}s</Text>
 
-      {/* Song Info Placeholder */}
+      {/* Song Card */}
       <View style={styles.songCard}>
         <Text style={styles.songIcon}>🎵</Text>
-        <Text style={styles.songHint}>
-          {roundNumber === 1
-            ? 'Playing on host device...'
-            : '🔊 Listen to the song!'}
-        </Text>
-        {guesses.some((g) => g.correct) && (
+        {revealedSong ? (
           <View style={styles.reveal}>
-            <Text style={styles.revealTitle}>{round.song.title}</Text>
-            <Text style={styles.revealArtist}>{round.song.artist}</Text>
+            <Text style={styles.revealTitle}>{revealedSong.title}</Text>
+            <Text style={styles.revealArtist}>{revealedSong.artist}</Text>
           </View>
+        ) : (
+          <Text style={styles.songHint}>
+            🔊 Listen on the host's device!
+          </Text>
         )}
       </View>
 
+      {/* Answer Feedback */}
+      {answerFeedback && (
+        <View style={answerFeedback.correct ? styles.feedbackCorrect : styles.feedbackWrong}>
+          <Text style={styles.feedbackText}>
+            {answerFeedback.correct
+              ? `🎉 Correct! +${answerFeedback.points} pts`
+              : '❌ Wrong guess!'}
+          </Text>
+        </View>
+      )}
+
       {/* Guess Input */}
-      <View style={styles.guessSection}>
-        <TextInput
-          style={styles.guessInput}
-          placeholder="Type the song title..."
-          placeholderTextColor="#484F58"
-          value={guess}
-          onChangeText={setGuess}
-          returnKeyType="send"
-          onSubmitEditing={handleSubmitGuess}
-          editable={timeLeft > 0 && !guesses.some((g) => g.correct)}
-        />
-        <TouchableOpacity
-          style={styles.sendButton}
-          onPress={handleSubmitGuess}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.sendText}>Guess!</Text>
-        </TouchableOpacity>
-      </View>
+      {roundActive && (
+        <View style={styles.guessSection}>
+          <TextInput
+            style={styles.guessInput}
+            placeholder="Type the song title..."
+            placeholderTextColor="#484F58"
+            value={guess}
+            onChangeText={setGuess}
+            returnKeyType="send"
+            onSubmitEditing={handleSubmitGuess}
+            editable={roundActive && !isAnswering}
+          />
+          <TouchableOpacity
+            style={[styles.sendButton, isAnswering && styles.sendButtonDisabled]}
+            onPress={handleSubmitGuess}
+            activeOpacity={0.8}
+            disabled={isAnswering}
+          >
+            <Text style={styles.sendText}>Guess!</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Recent Guesses */}
       <FlatList
@@ -164,23 +261,23 @@ export default function GameScreen({ navigation, route }: Props) {
             ]}
           >
             <Text style={styles.guessPlayer}>{item.player}:</Text>
-            <Text style={styles.guessText}>{item.guess}</Text>
+            <Text style={styles.guessText} numberOfLines={1}>{item.guess}</Text>
             <Text style={styles.guessResult}>
-              {item.correct ? '✅' : '❌'}
+              {item.correct ? '✅' : item.guess.includes('guessed') ? '🤔' : '❌'}
             </Text>
           </View>
         )}
       />
 
       {/* Next Round / End */}
-      {(timeLeft === 0 || guesses.some((g) => g.correct)) && (
+      {!roundActive && (
         <TouchableOpacity
           style={styles.nextButton}
           onPress={handleNextRound}
           activeOpacity={0.85}
         >
           <Text style={styles.nextButtonText}>
-            {roundNumber >= 10 ? 'See Results →' : 'Next Round →'}
+            {roundNumber >= totalRounds ? 'See Results →' : 'Next Round →'}
           </Text>
         </TouchableOpacity>
       )}
@@ -236,7 +333,7 @@ const styles = StyleSheet.create({
     borderColor: '#30363D',
     padding: 32,
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 12,
   },
   songIcon: {
     fontSize: 48,
@@ -248,7 +345,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   reveal: {
-    marginTop: 12,
     alignItems: 'center',
   },
   revealTitle: {
@@ -260,6 +356,29 @@ const styles = StyleSheet.create({
     color: '#8B949E',
     fontSize: 16,
     marginTop: 4,
+  },
+  feedbackCorrect: {
+    backgroundColor: '#3FB95020',
+    borderWidth: 1,
+    borderColor: '#3FB95040',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 8,
+    alignItems: 'center',
+  },
+  feedbackWrong: {
+    backgroundColor: '#F8514920',
+    borderWidth: 1,
+    borderColor: '#F8514940',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 8,
+    alignItems: 'center',
+  },
+  feedbackText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+    fontSize: 15,
   },
   guessSection: {
     flexDirection: 'row',
@@ -281,6 +400,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: 20,
     justifyContent: 'center',
+  },
+  sendButtonDisabled: {
+    opacity: 0.6,
   },
   sendText: {
     color: '#FFFFFF',

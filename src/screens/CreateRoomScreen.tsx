@@ -9,9 +9,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  ActivityIndicator,
+  ScrollView,
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList, GameMode, MusicSource } from '../types';
+import { useStore } from '../store';
+import api from '../services/api';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CreateRoom'>;
 
@@ -27,103 +31,138 @@ const SOURCES: { id: MusicSource; label: string }[] = [
 ];
 
 export default function CreateRoomScreen({ navigation }: Props) {
-  const [username, setUsername] = useState('');
+  const { token, setRoom } = useStore();
   const [mode, setMode] = useState<GameMode>('classic_rush');
   const [source, setSource] = useState<MusicSource>('youtube');
   const [rounds, setRounds] = useState('10');
+  const [creating, setCreating] = useState(false);
 
-  const handleCreate = () => {
-    if (!username.trim()) {
-      Alert.alert('Name required', 'Enter a display name to host');
+  const handleCreate = async () => {
+    if (!token) {
+      Alert.alert('Not authenticated', 'Please go back and try again');
       return;
     }
-    // TODO: connect to WebSocket, create room on server
-    // For now, navigate with params
-    navigation.navigate('Lobby', { roomId: 'new', code: '------' });
+
+    const roundsNum = parseInt(rounds, 10);
+    if (isNaN(roundsNum) || roundsNum < 1 || roundsNum > 50) {
+      Alert.alert('Invalid rounds', 'Enter a number between 1 and 50');
+      return;
+    }
+
+    setCreating(true);
+    try {
+      const room = await api.createRoom(token, {
+        mode,
+        music_source: source,
+        total_rounds: roundsNum,
+        guess_time: mode === 'speed_round' ? 10 : mode === 'lyric_clues' ? 45 : 30,
+      });
+
+      // Store room in state
+      setRoom({
+        id: room.id,
+        code: room.code,
+        mode: room.mode as GameMode,
+        totalRounds: room.total_rounds,
+        status: room.status as any,
+        hostId: room.host_id,
+        players: room.players.map((p) => ({
+          id: p.id,
+          username: p.username,
+          displayName: p.display_name,
+          score: p.score,
+          isHost: p.is_host,
+          status: p.status as any,
+          joinedAt: Date.now(),
+        })),
+      });
+
+      navigation.navigate('Lobby', { roomId: room.id, code: room.code });
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to create room');
+    } finally {
+      setCreating(false);
+    }
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.content}
+        style={styles.flex}
       >
-        {/* Display Name */}
-        <Text style={styles.label}>Your Display Name</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="e.g. SongNinja"
-          placeholderTextColor="#484F58"
-          value={username}
-          onChangeText={setUsername}
-          maxLength={20}
-        />
-
-        {/* Game Mode */}
-        <Text style={styles.label}>Game Mode</Text>
-        <View style={styles.modeGrid}>
-          {MODES.map((m) => (
-            <TouchableOpacity
-              key={m.id}
-              style={[styles.modeCard, mode === m.id && styles.modeCardActive]}
-              onPress={() => setMode(m.id)}
-              activeOpacity={0.8}
-            >
-              <Text
-                style={[
-                  styles.modeLabel,
-                  mode === m.id && styles.modeLabelActive,
-                ]}
+        <ScrollView contentContainerStyle={styles.content}>
+          {/* Game Mode */}
+          <Text style={styles.label}>Game Mode</Text>
+          <View style={styles.modeGrid}>
+            {MODES.map((m) => (
+              <TouchableOpacity
+                key={m.id}
+                style={[styles.modeCard, mode === m.id && styles.modeCardActive]}
+                onPress={() => setMode(m.id)}
+                activeOpacity={0.8}
               >
-                {m.label}
-              </Text>
-              <Text style={styles.modeDesc}>{m.desc}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+                <Text
+                  style={[
+                    styles.modeLabel,
+                    mode === m.id && styles.modeLabelActive,
+                  ]}
+                >
+                  {m.label}
+                </Text>
+                <Text style={styles.modeDesc}>{m.desc}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
 
-        {/* Music Source */}
-        <Text style={styles.label}>Music Source</Text>
-        <View style={styles.sourceRow}>
-          {SOURCES.map((s) => (
-            <TouchableOpacity
-              key={s.id}
-              style={[
-                styles.sourceChip,
-                source === s.id && styles.sourceChipActive,
-              ]}
-              onPress={() => setSource(s.id)}
-            >
-              <Text
+          {/* Music Source */}
+          <Text style={styles.label}>Music Source</Text>
+          <View style={styles.sourceRow}>
+            {SOURCES.map((s) => (
+              <TouchableOpacity
+                key={s.id}
                 style={[
-                  styles.sourceLabel,
-                  source === s.id && styles.sourceLabelActive,
+                  styles.sourceChip,
+                  source === s.id && styles.sourceChipActive,
                 ]}
+                onPress={() => setSource(s.id)}
               >
-                {s.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+                <Text
+                  style={[
+                    styles.sourceLabel,
+                    source === s.id && styles.sourceLabelActive,
+                  ]}
+                >
+                  {s.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
 
-        {/* Rounds */}
-        <Text style={styles.label}>Rounds</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="10"
-          placeholderTextColor="#484F58"
-          value={rounds}
-          onChangeText={setRounds}
-          keyboardType="number-pad"
-        />
+          {/* Rounds */}
+          <Text style={styles.label}>Rounds</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="10"
+            placeholderTextColor="#484F58"
+            value={rounds}
+            onChangeText={setRounds}
+            keyboardType="number-pad"
+          />
 
-        <TouchableOpacity
-          style={styles.createButton}
-          onPress={handleCreate}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.createButtonText}>Create Room</Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.createButton, creating && styles.createButtonDisabled]}
+            onPress={handleCreate}
+            activeOpacity={0.85}
+            disabled={creating}
+          >
+            {creating ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <Text style={styles.createButtonText}>Create Room</Text>
+            )}
+          </TouchableOpacity>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -134,8 +173,8 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0D1117',
   },
+  flex: { flex: 1 },
   content: {
-    flex: 1,
     padding: 20,
     gap: 8,
   },
@@ -219,6 +258,9 @@ const styles = StyleSheet.create({
     padding: 18,
     alignItems: 'center',
     marginTop: 24,
+  },
+  createButtonDisabled: {
+    opacity: 0.6,
   },
   createButtonText: {
     color: '#FFFFFF',

@@ -8,36 +8,44 @@ import {
   FlatList,
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { RootStackParamList, Player } from '../types';
+import type { RootStackParamList } from '../types';
+import { useStore } from '../store';
+import { socketClient } from '../services/socket';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Results'>;
 
-const MOCK_RESULTS: (Player & { rank: number })[] = [
-  {
-    id: '1',
-    username: 'Host',
-    displayName: 'You',
-    score: 2840,
-    status: 'ready',
-    isHost: true,
-    joinedAt: Date.now(),
-    rank: 1,
-  },
-  {
-    id: '2',
-    username: 'Guest1',
-    displayName: 'Guest1',
-    score: 1950,
-    status: 'ready',
-    isHost: false,
-    joinedAt: Date.now(),
-    rank: 2,
-  },
-];
-
 export default function ResultsScreen({ navigation }: Props) {
-  const sorted = [...MOCK_RESULTS].sort((a, b) => b.score - a.score);
-  const winner = sorted[0];
+  const { lastGameResults, players, user, clearRoom } = useStore();
+
+  // Use real results from store, fall back to current players if available
+  const rankings = lastGameResults?.rankings?.length
+    ? lastGameResults.rankings
+    : [...players]
+        .sort((a, b) => b.score - a.score)
+        .map((p, i) => ({
+          id: p.id,
+          displayName: p.displayName,
+          score: p.score,
+          rank: i + 1,
+        }));
+
+  const winner = lastGameResults?.winner
+    ? lastGameResults.winner
+    : rankings.length > 0
+    ? { id: rankings[0].id, displayName: rankings[0].displayName, score: rankings[0].score }
+    : null;
+
+  const handlePlayAgain = () => {
+    socketClient.disconnect();
+    clearRoom();
+    navigation.popToTop();
+  };
+
+  const handleBackToHome = () => {
+    socketClient.disconnect();
+    clearRoom();
+    navigation.popToTop();
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -45,15 +53,15 @@ export default function ResultsScreen({ navigation }: Props) {
       <View style={styles.winnerSection}>
         <Text style={styles.trophy}>🏆</Text>
         <Text style={styles.winnerLabel}>Winner</Text>
-        <Text style={styles.winnerName}>{winner.displayName}</Text>
-        <Text style={styles.winnerScore}>{winner.score} pts</Text>
+        <Text style={styles.winnerName}>{winner?.displayName || '???'}</Text>
+        <Text style={styles.winnerScore}>{winner?.score || 0} pts</Text>
       </View>
 
       {/* Full Rankings */}
       <Text style={styles.sectionTitle}>Final Rankings</Text>
 
       <FlatList
-        data={sorted}
+        data={rankings}
         keyExtractor={(p) => p.id}
         contentContainerStyle={styles.list}
         renderItem={({ item, index }) => (
@@ -66,8 +74,8 @@ export default function ResultsScreen({ navigation }: Props) {
             <Text style={styles.rankNumber}>#{item.rank}</Text>
             <View style={styles.rankInfo}>
               <Text style={styles.rankName}>{item.displayName}</Text>
-              {item.isHost && (
-                <Text style={styles.hostTag}>Host</Text>
+              {item.id === user?.id && (
+                <Text style={styles.youTag}>You</Text>
               )}
             </View>
             <Text style={styles.scoreValue}>{item.score}</Text>
@@ -79,7 +87,7 @@ export default function ResultsScreen({ navigation }: Props) {
       <View style={styles.actions}>
         <TouchableOpacity
           style={styles.primaryButton}
-          onPress={() => navigation.popToTop()}
+          onPress={handlePlayAgain}
           activeOpacity={0.85}
         >
           <Text style={styles.primaryText}>Play Again</Text>
@@ -87,7 +95,7 @@ export default function ResultsScreen({ navigation }: Props) {
 
         <TouchableOpacity
           style={styles.secondaryButton}
-          onPress={() => navigation.popToTop()}
+          onPress={handleBackToHome}
         >
           <Text style={styles.secondaryText}>Back to Home</Text>
         </TouchableOpacity>
@@ -170,10 +178,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  hostTag: {
-    color: '#F0883E',
+  youTag: {
+    color: '#1A73E8',
     fontSize: 11,
-    backgroundColor: '#F0883E20',
+    backgroundColor: '#1A73E820',
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 6,

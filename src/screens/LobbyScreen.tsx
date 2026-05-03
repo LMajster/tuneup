@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,38 +6,121 @@ import {
   TouchableOpacity,
   SafeAreaView,
   FlatList,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList, Player } from '../types';
+import { useStore } from '../store';
+import { socketClient } from '../services/socket';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Lobby'>;
 
-const MOCK_PLAYERS: Player[] = [
-  {
-    id: '1',
-    username: 'Host',
-    displayName: 'You',
-    score: 0,
-    status: 'ready',
-    isHost: true,
-    joinedAt: Date.now(),
-  },
-  {
-    id: '2',
-    username: 'Guest1',
-    displayName: 'Guest1',
-    score: 0,
-    status: 'not_ready',
-    isHost: false,
-    joinedAt: Date.now(),
-  },
-];
-
 export default function LobbyScreen({ navigation, route }: Props) {
-  const { code } = route.params;
-  const [players, setPlayers] = useState<Player[]>(MOCK_PLAYERS);
+  const { code, roomId } = route.params;
+  const {
+    token,
+    user,
+    players,
+    setRoom,
+    updatePlayers,
+    addPlayer,
+    removePlayer,
+    setGameStatus,
+    isHost,
+  } = useStore();
 
-  // TODO: connect to WebSocket, listen for player_joined events
+  const [connecting, setConnecting] = useState(true);
+  const [wsError, setWsError] = useState<string | null>(null);
+
+  // Connect WebSocket on mount
+  useEffect(() => {
+    if (!token || !roomId) return;
+
+    setConnecting(true);
+    setWsError(null);
+
+    socketClient
+      .connect(roomId, token)
+      .then(() => {
+        setConnecting(false);
+      })
+      .catch((err) => {
+        setConnecting(false);
+        setWsError('Failed to connect to game server');
+        console.error('[Lobby] WS connect error:', err);
+      });
+
+    // Listen for player events
+    socketClient.on('room_state', (data) => {
+      if (data.players) {
+        updatePlayers(
+          data.players.map((p: any) => ({
+            id: p.id,
+            username: p.username,
+            displayName: p.display_name || p.username,
+            score: p.score || 0,
+            isHost: p.is_host || p.isHost,
+            status: p.status || 'not_ready',
+            joinedAt: Date.now(),
+          }))
+        );
+      }
+      if (data.status) {
+        setGameStatus(data.status);
+      }
+    });
+
+    socketClient.on('player_connected', (data) => {
+      // Player connected — the room_state broadcast will update the list
+    });
+
+    socketClient.on('player_disconnected', (data) => {
+      removePlayer(data.player_id);
+    });
+
+    socketClient.on('game_starting', (data) => {
+      // Navigate to game after countdown
+      const countdown = data.countdown || 3;
+      setTimeout(() => {
+        navigation.replace('Game', { roomId });
+      }, countdown * 1000);
+    });
+
+    socketClient.on('error', (data) => {
+      Alert.alert('Error', data.message || 'Something went wrong');
+    });
+
+    return () => {
+      // Don't disconnect on unmount — we might navigate to Game screen
+    };
+  }, [roomId]);
+
+  const handleStartGame = () => {
+    socketClient.send({ type: 'start_game', data: {} });
+  };
+
+  const handleLeave = () => {
+    socketClient.disconnect();
+    navigation.popToTop();
+  };
+
+  const sortedPlayers = [...players].sort((a, b) => {
+    if (a.isHost) return -1;
+    if (b.isHost) return 1;
+    return a.displayName.localeCompare(b.displayName);
+  });
+
+  if (connecting) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.center}>
+          <ActivityIndicator color="#1A73E8" size="large" />
+          <Text style={styles.connectingText}>Connecting to room...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -48,13 +131,19 @@ export default function LobbyScreen({ navigation, route }: Props) {
         <Text style={styles.codeHint}>Share this code with friends</Text>
       </View>
 
+      {wsError && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorText}>⚠️ {wsError}</Text>
+        </View>
+      )}
+
       {/* Players List */}
       <Text style={styles.sectionTitle}>
         Players ({players.length})
       </Text>
 
       <FlatList
-        data={players}
+        data={sortedPlayers}
         keyExtractor={(p) => p.id}
         contentContainerStyle={styles.playerList}
         renderItem={({ item }) => (
@@ -89,22 +178,27 @@ export default function LobbyScreen({ navigation, route }: Props) {
 
       {/* Host Controls */}
       <View style={styles.controls}>
-        <TouchableOpacity
-          style={styles.startButton}
-          onPress={() =>
-            navigation.replace('Game', { roomId: route.params.roomId })
-          }
-          activeOpacity={0.85}
-        >
-          <Text style={styles.startButtonText}>
-            Start Game
-          </Text>
-        </TouchableOpacity>
+        {isHost ? (
+          <TouchableOpacity
+            style={[
+              styles.startButton,
+              players.length < 1 && styles.startButtonDisabled,
+            ]}
+            onPress={handleStartGame}
+            activeOpacity={0.85}
+            disabled={players.length < 1}
+          >
+            <Text style={styles.startButtonText}>Start Game</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.waitingHost}>
+            <Text style={styles.waitingText}>
+              Waiting for host to start...
+            </Text>
+          </View>
+        )}
 
-        <TouchableOpacity
-          style={styles.leaveButton}
-          onPress={() => navigation.popToTop()}
-        >
+        <TouchableOpacity style={styles.leaveButton} onPress={handleLeave}>
           <Text style={styles.leaveText}>Leave Room</Text>
         </TouchableOpacity>
       </View>
@@ -117,6 +211,16 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0D1117',
     padding: 20,
+  },
+  center: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  connectingText: {
+    color: '#8B949E',
+    fontSize: 16,
+    marginTop: 16,
   },
   codeSection: {
     alignItems: 'center',
@@ -145,6 +249,19 @@ const styles = StyleSheet.create({
     color: '#484F58',
     fontSize: 12,
     marginTop: 8,
+  },
+  errorBanner: {
+    backgroundColor: '#F8514920',
+    borderWidth: 1,
+    borderColor: '#F8514940',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 16,
+  },
+  errorText: {
+    color: '#F85149',
+    fontSize: 13,
+    textAlign: 'center',
   },
   sectionTitle: {
     color: '#8B949E',
@@ -221,10 +338,21 @@ const styles = StyleSheet.create({
     padding: 18,
     alignItems: 'center',
   },
+  startButtonDisabled: {
+    opacity: 0.4,
+  },
   startButtonText: {
     color: '#FFFFFF',
     fontSize: 18,
     fontWeight: '700',
+  },
+  waitingHost: {
+    padding: 18,
+    alignItems: 'center',
+  },
+  waitingText: {
+    color: '#8B949E',
+    fontSize: 14,
   },
   leaveButton: {
     padding: 12,

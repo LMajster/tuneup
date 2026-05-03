@@ -1,5 +1,7 @@
 // ─── WebSocket Client ──────────────────────────────
-// Connects to the Tuneup game server
+// Connects to the Tuneup game server on the VPS.
+
+const WS_URL = 'ws://89.167.6.79/ws';
 
 export type WsEventCallback = (data: any) => void;
 
@@ -7,17 +9,33 @@ class SocketClient {
   private ws: WebSocket | null = null;
   private listeners = new Map<string, WsEventCallback[]>();
   private serverUrl: string;
+  private token: string = '';
+  private roomId: string = '';
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private shouldReconnect = false;
 
-  constructor(url = 'ws://localhost:8000/ws') {
-    this.serverUrl = url;
+  constructor() {
+    this.serverUrl = WS_URL;
   }
 
-  connect(playerId: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(`${this.serverUrl}?player_id=${playerId}`);
+  connect(roomId: string, token: string): Promise<void> {
+    this.roomId = roomId;
+    this.token = token;
+    this.shouldReconnect = true;
 
-      this.ws.onopen = () => resolve();
-      this.ws.onerror = (err) => reject(err);
+    return new Promise((resolve, reject) => {
+      const url = `${this.serverUrl}/${roomId}?token=${encodeURIComponent(token)}`;
+      this.ws = new WebSocket(url);
+
+      this.ws.onopen = () => {
+        console.log('[WS] Connected to', roomId);
+        resolve();
+      };
+
+      this.ws.onerror = (err) => {
+        console.error('[WS] Error:', err);
+        reject(err);
+      };
 
       this.ws.onmessage = (event) => {
         try {
@@ -26,13 +44,19 @@ class SocketClient {
           const cbs = this.listeners.get(type) || [];
           cbs.forEach((cb) => cb(data));
         } catch (e) {
-          console.error('WS parse error:', e);
+          console.error('[WS] Parse error:', e, 'raw:', event.data);
         }
       };
 
-      this.ws.onclose = () => {
-        // Attempt reconnect after 3s
-        setTimeout(() => this.connect(playerId), 3000);
+      this.ws.onclose = (event) => {
+        console.log('[WS] Closed:', event.code, event.reason);
+        // Auto-reconnect after 3s (unless game is over or explicit disconnect)
+        if (this.shouldReconnect && event.code !== 4001 && event.code !== 4003) {
+          this.reconnectTimer = setTimeout(() => {
+            console.log('[WS] Reconnecting...');
+            this.connect(this.roomId, this.token).catch(() => {});
+          }, 3000);
+        }
       };
     });
   }
@@ -40,6 +64,8 @@ class SocketClient {
   send(data: object) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
+    } else {
+      console.warn('[WS] Cannot send — not connected');
     }
   }
 
@@ -61,6 +87,11 @@ class SocketClient {
   }
 
   disconnect() {
+    this.shouldReconnect = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.ws?.close();
     this.ws = null;
     this.listeners.clear();

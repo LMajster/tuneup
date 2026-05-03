@@ -1,7 +1,15 @@
 // ─── REST API Client ───────────────────────────────
-// Communicates with the Tuneup game server
+// Communicates with the Tuneup game server on the VPS.
 
-const BASE_URL = 'http://localhost:8000/api';
+import type { User } from '../types';
+
+// VPS server URL
+const BASE_URL = 'http://89.167.6.79/api';
+
+interface ApiResponse<T> {
+  data?: T;
+  error?: string;
+}
 
 async function request<T>(
   path: string,
@@ -17,41 +25,125 @@ async function request<T>(
   });
 
   if (!res.ok) {
-    const error = await res.text();
-    throw new Error(`API ${res.status}: ${error}`);
+    const text = await res.text();
+    let detail = text;
+    try {
+      const json = JSON.parse(text);
+      detail = json.detail || json.message || text;
+    } catch {}
+    throw new Error(`API ${res.status}: ${detail}`);
   }
 
   return res.json();
 }
 
+// ─── API Response Shapes ───────────────────────────
+
+interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  user: {
+    id: string;
+    username: string;
+    display_name: string;
+    avatar_url: string | null;
+    games_played: number;
+    games_won: number;
+    total_score: number;
+    created_at: string;
+  };
+}
+
+interface RoomResponse {
+  id: string;
+  code: string;
+  host_id: string;
+  mode: string;
+  music_source: string;
+  total_rounds: number;
+  guess_time: number;
+  status: string;
+  players: {
+    id: string;
+    username: string;
+    display_name: string;
+    score: number;
+    is_host: boolean;
+    status: string;
+  }[];
+  created_at: string;
+}
+
+// ─── API Methods ───────────────────────────────────
+
 export const api = {
   // ─── Auth ───────────────────────────────────
-  register: (username: string, password: string) =>
-    request<{ token: string; user: any }>('/auth/register', {
+  register: (
+    username: string,
+    displayName: string,
+    password: string
+  ): Promise<{ token: string; user: User }> =>
+    request<TokenResponse>('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
-    }),
+      body: JSON.stringify({
+        username,
+        display_name: displayName,
+        password,
+      }),
+    }).then((res) => ({
+      token: res.access_token,
+      user: {
+        id: res.user.id,
+        username: res.user.username,
+        displayName: res.user.display_name,
+        avatarUrl: res.user.avatar_url || undefined,
+      },
+    })),
 
-  login: (username: string, password: string) =>
-    request<{ token: string; user: any }>('/auth/login', {
+  login: (username: string, password: string): Promise<{ token: string; user: User }> =>
+    request<TokenResponse>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
-    }),
+    }).then((res) => ({
+      token: res.access_token,
+      user: {
+        id: res.user.id,
+        username: res.user.username,
+        displayName: res.user.display_name,
+        avatarUrl: res.user.avatar_url || undefined,
+      },
+    })),
 
   // ─── Rooms ──────────────────────────────────
-  createRoom: (token: string, data: any) =>
-    request<{ room: any }>('/rooms', {
+  createRoom: (
+    token: string,
+    data: { mode?: string; music_source?: string; total_rounds?: number; guess_time?: number }
+  ): Promise<RoomResponse> =>
+    request<RoomResponse>('/rooms', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify(data),
     }),
 
-  getRoom: (code: string) =>
-    request<{ room: any }>(`/rooms/${code}`),
+  getRoom: (code: string): Promise<RoomResponse> =>
+    request<RoomResponse>(`/rooms/${code}`),
 
-  // ─── Stats ──────────────────────────────────
+  joinRoom: (token: string, code: string): Promise<RoomResponse> =>
+    request<RoomResponse>('/rooms/join', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ code }),
+    }),
+
+  leaveRoom: (token: string, code: string): Promise<{ status: string }> =>
+    request<{ status: string }>(`/rooms/${code}/leave`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+
+  // ─── Profile ─────────────────────────────────
   getProfile: (token: string) =>
-    request<{ user: any }>('/profile', {
+    request('/profile', {
       headers: { Authorization: `Bearer ${token}` },
     }),
 };
