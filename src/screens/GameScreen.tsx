@@ -13,6 +13,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../types';
 import { useStore } from '../store';
 import { socketClient } from '../services/socket';
+import YouTubePlayer from '../components/YouTubePlayer';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Game'>;
 
@@ -45,6 +46,7 @@ export default function GameScreen({ navigation, route }: Props) {
   const [roundActive, setRoundActive] = useState(true);
   const [answerFeedback, setAnswerFeedback] = useState<{ correct: boolean; points: number } | null>(null);
   const [isAnswering, setIsAnswering] = useState(false);
+  const [youtubeId, setYoutubeId] = useState<string | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Initialize scores from players
@@ -69,6 +71,11 @@ export default function GameScreen({ navigation, route }: Props) {
       setIsAnswering(false);
       setGuess('');
 
+      // Play the song on host's device
+      if (data.youtube_id) {
+        setYoutubeId(data.youtube_id);
+      }
+
       // Start timer
       if (timerRef.current) clearInterval(timerRef.current);
       let remaining = data.guess_time || 30;
@@ -92,6 +99,8 @@ export default function GameScreen({ navigation, route }: Props) {
         title: data.song?.title || 'Unknown',
         artist: data.song?.artist || 'Unknown',
       });
+      // Stop playing when round ends
+      setYoutubeId(null);
 
       // Update scores from rankings
       if (data.rankings) {
@@ -207,10 +216,18 @@ export default function GameScreen({ navigation, route }: Props) {
           </View>
         ) : (
           <Text style={styles.songHint}>
-            🔊 Listen on the host's device!
+            {revealedSong ? '' : 'Guess the song!'}
           </Text>
         )}
       </View>
+
+      {/* YouTube Player */}{" "}
+      <YouTubePlayer
+        videoId={youtubeId}
+        songTitle={revealedSong?.title}
+        songArtist={revealedSong?.artist}
+        shouldPlay={roundActive && !!youtubeId}
+      />
 
       {/* Answer Feedback */}
       {answerFeedback && (

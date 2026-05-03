@@ -60,7 +60,6 @@ async def handle_websocket(ws: WebSocket, room_id: str, token: str):
                 }
                 for rp in room_obj.players
             ]
-            from app.websocket.manager import manager
             await manager.broadcast(room_id, {
                 "type": "room_state",
                 "room_id": room_id,
