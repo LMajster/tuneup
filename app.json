@@ -32,8 +32,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "tuneup"
+        "projectId": "b8d31838-d6d2-431d-a454-2b2faf8b3d4e"
       }
-    }
+    },
+    "owner": "lmaj"
   }
 }
